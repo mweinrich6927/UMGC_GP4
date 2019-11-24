@@ -1,0 +1,408 @@
+---
+title: "Group Project"
+author: "Mary Friedman"
+date: "10/26/2019"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+  word_document: default
+editor_options:
+  chunk_output_type: console
+---
+
+Notes: 
+  - You do not have to put all of your team members' code into a single file. I have included all 5 analyses just for your information. You only need the code for your analysis.
+  - The tasks include both coding and written interpretation. 
+  - Please knit to word document -- it will make it easier to combine your results with your team members in to the single manuscript (submitted in GP4).
+
+## Setup
+
+### Load packages
+
+```{r setup, include=FALSE}
+### Global knitr options
+knitr::opts_chunk$set(echo = TRUE)
+
+### Load packages/libraries that we will need
+library(tidyverse)
+library(viridis)       # Better plot colors
+library(ggpubr)        # Fancy plots
+library(GGally)        # Sample summary viz
+library(skimr)         # Sample summary table
+```
+
+### Custom ggplot theme
+
+```{r theme}
+### DON'T EDIT CODE IN THIS CHUNK
+
+theme_custom <- theme_bw() +
+  
+  # if we have a plot title or subtitle, let's center it
+  theme (
+    plot.title = element_text(hjust = 0.5),
+    plot.subtitle = element_text(hjust = 0.5)
+  ) 
+theme_set(theme_custom)
+
+### We'll make the viridis color scale our default plotting color palette
+scale_colour_continuous <- function(...) {
+  scale_colour_viridis_c(...)
+}
+scale_fill_continuous <- function(...) {
+  scale_fill_viridis_c(...)
+}
+scale_colour_discrete <- function(...) {
+  scale_colour_viridis_d(..., begin = 0, end = 0.9)
+}
+scale_fill_discrete <- function(...) {
+  scale_fill_viridis_d(..., begin = 0, end = 0.9)
+}
+```
+
+### Setwd fix (if needed)
+
+If you are having trouble loading the exprs_tidy file below, manually override the working directory. To do this
+  1. In the menu bar, click: Session > Set Working Directory > To Source File Location
+  2. Copy the line of code in the console, and paste it into the code chunk below
+  
+```{r fix_setwd}
+### EDIT if necessary
+###setwd("~/UMUC/BIFS 613 - Stats of Bioprocesses/Group Project")
+```
+
+### FYI: how I got the data
+
+```{r get_data, eval=FALSE}
+### Get list of available datasets
+### https://www.bioconductor.org/packages/3.3/bioc/vignettes/TCGAbiolinks/inst/doc/tcgaBiolinks.html#harmonized-data-1
+View(getGDCprojects())
+
+### Datasets to use for group project (I picked the ones with smallest sample size and no sex bias)
+projects <- c(
+  "TCGA-ACC",
+  "TCGA-CHOL", 
+  "TCGA-DLBC", 
+  "TCGA-KICH", 
+  "TCGA-MESO", 
+  "TCGA-UVM"
+)
+
+phenoList <-  vector(mode = "list", length = length(projects))
+names(phenoList) <- projects
+exprsList <-  vector(mode = "list", length = length(projects))
+names(exprsList) <- projects
+for (i in projects) { 
+  ### Get data (in summarized experiment ["se"]  format)
+  query <- GDCquery(
+    project = i, 
+    data.category = "Transcriptome Profiling", 
+    data.type = "Gene Expression Quantification", 
+    workflow.type = "HTSeq - FPKM"
+  )
+  GDCdownload(query)
+  se <- GDCprepare(query)
+  
+  ### Extract phenoData and remove columns that either are all different or all consistent
+  pheno_full <- as.data.frame(colData(se))
+  pheno <- janitor::remove_constant(pheno_full)
+  
+  ### Extract exprs matrix and remove lowly expressed
+  exprs_full <- assay(se)
+  keep <- rowSums(exprs_full > 1) >= 10
+  exprs <- exprs_full[keep, ]
+
+  ### Shorten the sample id
+  rownames(pheno) <- abbreviate(gsub("TCGA-OR-", "", rownames(pheno)), method = "both")
+  pheno$id <- rownames(pheno)
+  colnames(exprs) <- abbreviate(gsub("TCGA-OR-", "", colnames(exprs)), method = "both")
+  
+  ### Remove extra columns (not groups)
+  pheno$sample <- pheno$id
+  pheno$id <- NULL
+  remove_cols <- c(
+    "patient", "updated_datetime", "updated_datetime.x", "updated_datetime.y", 
+    "barcode", "diagnosis_id", "demographic_id", "exposure_id", "bcr_patient_barcode", 
+    "morphology", "treatments", 
+    "days_to_birth", "days_to_last_follow_up", "days_to_death",
+    "year_of_birth", "year_of_diagnosis", "year_of_death"
+  )
+  pheno <- pheno[ , !(colnames(pheno) %in% remove_cols)]
+  pheno <- pheno[ , !(colnames(pheno) %in% colnames(pheno)[grep("_CHOL_del|_CHOL_amp|subtype_", colnames(pheno))])]
+
+  ### Save
+  saveRDS(exprs, paste0(i, "_exprs.rds"))
+  saveRDS(pheno, paste0(i, "_pheno.rds"))
+  
+  ### Add to list
+  exprsList[[i]]  <- exprs
+  phenoList[[i]] <- pheno
+  
+  ### Clean up
+  rm(exprs)
+  rm(exprs_full)
+  rm(pheno)
+  rm(pheno_full)
+  rm(keep)
+}
+
+### Save
+saveRDS(exprsList, "all_exprs.rds")
+saveRDS(phenoList, "all_pheno.rds")
+
+### Look at
+sapply(exprsList, dim)
+sapply(phenoList, dim)
+sapply(phenoList, names)
+
+### Write out names
+rbind(
+  paste("ACC:", toString(sort(names(phenoList$`TCGA-ACC`)))),
+  paste("CHOL:", toString(sort(names(phenoList$`TCGA-CHOL`)))),
+  paste("DLBC:", toString(sort(names(phenoList$`TCGA-DLBC`)))),
+  paste("KICH:", toString(sort(names(phenoList$`TCGA-KICH`)))),
+  paste("MESO:", toString(sort(names(phenoList$`TCGA-MESO`)))),
+  paste("UVM:", toString(sort(names(phenoList$`TCGA-UVM`))))
+) %>%
+  writeLines("sample_variables.txt")
+```
+
+## Pre-process data 
+
+Your entire team should use the same code for this section!
+
+### Load your dataset
+
+```{r load_data}
+### EDIT: You need to insert your dataset file names in the quotes below
+
+exprs <- readRDS("TCGA-MESO_exprs.rds")
+pheno <- readRDS("TCGA-MESO_pheno.rds")
+```
+
+### Pick your group (variable of interest)
+
+This should be a variable that is categorical with at least 2 categories and at least 3 samples in each category Use colnames(pheno) to find out what variable options you have. You can use one of the descriptive summary functions (from AE3) to determine how many categories there are for each group, and how many samples there are for each category.
+
+```{r select_group}
+### EDIT!! Copy your variable of interest into a new column called "group". This will help generalize/simplify your project's code
+pheno$group <- pheno$gender
+```
+
+### Filter samples
+
+Check for samples with missing data for your "group"
+
+```{r filter_samples_check}
+### Don't edit
+
+### You can check this using the following (many other ways to check too)
+### Make sure no "blanks" either -- 
+### sometimes missing data isn't converted to an NA but instead is just blank
+summary(as.factor(pheno$group)) # look for blanks, no data, etc. categories
+table(is.na(pheno$group))
+```
+
+Remove samples with missing data (or no data; i.e. "not reported") for your "group". First from phenoData
+
+```{r filter_samples_remove}
+### Don't edit
+
+### Remove NAs
+pheno <- pheno[!is.na(pheno$group), ]
+
+### Remove blanks
+pheno <- pheno[!(pheno$group == ""), ]
+
+### Remove "not reported"
+pheno <- pheno[!(pheno$group == "not reported"), ]
+```
+
+And also remove them from exprsData
+
+```{r}
+### Don't edit
+
+exprs <- exprs[ , which(colnames(exprs) %in% rownames(pheno))]
+```
+
+### Filter genes with low expression
+
+Here we'll require FPKM > 5 in at least 25 samples (it will help reduce computational time)
+
+```{r filter_genes}
+### Don't edit
+
+### Filter
+exprs <- exprs[rowSums(exprs > 5) > 25, ]
+```
+
+### Finalize data
+
+Match order of samples in both pheno (rownames) and exprs (colnames) datasets
+
+```{r matrices}
+### Don't edit
+
+### Match order of samples in both matrices
+table(colnames(exprs) == rownames(pheno)) # check
+pheno <- pheno[match(colnames(exprs), rownames(pheno)), ] # fixes if needed
+table(colnames(exprs) == rownames(pheno)) # check
+```
+
+Convert expression matrix to tidy, so that we also have a tidy version of the data in case we need it.
+
+```{r tidy}
+### Don't edit
+
+### Create tibble with expression and pheno data
+tidy <- exprs %>% 
+  
+  # Convert expression matrix to tidy tibble
+  as_tibble(rownames = "gene") %>%
+  gather("sample", "fpkm", -gene)  %>%
+
+  # Add phenoData
+  inner_join(pheno, by = "sample")
+```
+
+## Team Member #1: Descriptive sample summary statistics
+
+Comments from Alexis: 
+
+I cleaned up the code a little, and added some stuff we didn't learn, to make the tables more interpretable. Your mistake was just plotting by sample instead of by group (very minor!).
+
+RE: "for future use remove age at diagnosis, due to weird scaling factors (or is it in date format???)" and "Not sure how to interpret age at diagnosis, is it soposed to be in a date format?" --> the age_at_diagnosis is in days not years, so I converted that in the code chunk below
+
+RE: "What does fpkm stand for in the tidy table" --> it's the gene expression level measure. It stands for: Fragments Per Kilobase of transcript per Million mapped reads
+
+### Preparing phenoData
+
+```{r}
+### Make "not reported" NA
+pheno[pheno == "not reported"] <- NA
+
+### Make categorical phenoData factors so they're summarized correctly and edit so readable
+pheno$group <- recode(pheno$group, "male" = "M", "female" = "F")
+pheno$group <- factor(pheno$group, levels = c("M", "F"))
+pheno$tumor_stage <- recode(pheno$tumor_stage, "stage i" = "1", "stage ia" = "1A", "stage ib" = "1B", "stage ii" = "2", "stage iii" = "3", "stage iv" = "4")
+pheno$tumor_stage <- factor(pheno$tumor_stage, levels = c("1", "1A", "1B", "2", "3", "4"))
+
+### Age at diagnosis is in days, so convert to years
+pheno$age_at_diagnosis <- pheno$age_at_diagnosis/365
+```
+
+### a. Table summarizing phenoData, stratified by the categories in your group of interest, this should also include missing data
+
+Table summary
+
+Here I just combined your individual skim tables into a single table, to make it easier to interpret. 
+
+```{r}
+### Summarize by group
+skim_format(.levels = list(max_char = 6))
+
+### Categorical
+pheno_summary_factors <- pheno %>%
+  
+  # select phenoData to summarize in the table (categorical/factors)
+  select(group, tumor_stage) %>%
+  
+  # create table
+  group_by(group) %>%
+  skim_to_wide() %>%
+  select(-one_of(c("type", "missing", "complete", "ordered", "n_unique"))) %>%
+  spread(variable, top_counts)
+
+### Numerical
+pheno_summary_nums <- pheno %>%
+  
+  # select phenoData to summarize in the table (continuous/numerical)
+  select(group, age_at_diagnosis) %>%
+  
+  # create table
+  group_by(group) %>%
+  skim_to_wide() %>%
+  select(mean, sd, p50)
+names(pheno_summary_nums) <- recode(
+  names(pheno_summary_nums),
+  "mean" = "age_mean",
+  "sd" = "age_sd",
+  "p50" = "age_median"
+)
+pheno_summary <- as_tibble(cbind(pheno_summary_factors, pheno_summary_nums))
+
+### Print
+pheno_summary
+
+### Save
+write_csv(pheno_summary, "pheno_summary.csv")
+```
+
+Figure 
+
+I really liked your customization of the plot!
+
+```{r}
+### Plot using GGally
+### Here group is gender
+pheno %>%
+  select(group, age_at_diagnosis, tumor_stage) %>%
+  ggpairs(
+    cardinality_threshold = 86,
+    aes(color = group)
+  )
+ggsave("pheno_summary_figure.png")
+```
+
+### BAP-1 data only
+
+I was really impressed that your team went into this detail. You were the only team to look at specific gene!
+
+I don't think you need to look at all of the phenoData variables, so I deleted those extra plots. YYou went above and beyond expectations!
+
+```{r}
+### Filter tidy data by gene of interest, BAP1
+BAP1 <- tidy %>%
+  filter(gene == "ENSG00000163930")
+
+### Log-transform the FPKM
+BAP1$logFPKM <- log2(BAP1$fpkm + 0.00001)
+
+### Summary statistics
+BAP1 %>%
+  select(group, age_at_diagnosis, tumor_stage, logFPKM) %>%
+  ggpairs(
+    cardinality_threshold = 86, 
+    aes(color = group)
+  )
+ggsave("pheno_summary_figure_BAP1-expression.png")
+```
+
+### b. Determine statistically significant differences, using appropriate statistical tests (based on whether the value is continuous vs. discrete, how many groups are being tested, and whether the groups have equal variances)
+
+```{r}
+### Significantly different age of diagnosis by group (here, gender)? Use t.test since age_at_diagnosis is numeric
+t.test(pheno$age_at_diagnosis ~ pheno$group)
+
+### Significantly different tumor stages by group (here, by gender)? Use fisher.test since tumor_stage is categorical
+fisher.test(
+  pheno$group, 
+  pheno$tumor_stage
+)
+```
+
+### c. Briefly describe the origin/source of the data (tumor type).
+
+This gets added to the methods section as a sentence. Ignore the original requirement to also describe the RNA-Seq performed to generate the expression data.
+
+### d. Describe the sample dataset using the summary table and statistical test results
+
+Pick either the table or the figure to add to the final paper (GP4). In the results section of the paper, briefly describe the table or figure in a few sentences.
+
+## Session info
+
+```{r sessioninfo}
+sessionInfo()
+```
